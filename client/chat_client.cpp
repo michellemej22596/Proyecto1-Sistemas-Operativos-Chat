@@ -1,25 +1,24 @@
-#include "websocket_client.hpp"
 #include <SFML/Graphics.hpp>
-#include <SFML/Window.hpp>
+#include <SFML/Network.hpp>
 #include <iostream>
-#include <vector>
-#include <string>
+#include "websocket_client.hpp"
 
 // Función para cargar la fuente del texto
 sf::Font loadFont() {
     sf::Font font;
     if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
-        std::cerr << "⚠️ No se pudo cargar la fuente. Verifica la instalación de fuentes." << std::endl;
+        std::cerr << "⚠ No se pudo cargar la fuente. Verifica la instalación de fuentes." << std::endl;
         exit(1);
     }
     return font;
 }
 
 int main() {
-    WebSocketClient wsClient("ws://127.0.0.1:8080");
+    WebSocketClient wsClient("ws://127.0.0.1:9000");
     sf::RenderWindow window(sf::VideoMode(900, 600), "💬 Chat Cliente", sf::Style::Titlebar | sf::Style::Close);
     sf::Font font = loadFont();
 
+    // Crear los elementos gráficos de la interfaz
     sf::RectangleShape chatBox(sf::Vector2f(600, 400));
     chatBox.setPosition(20, 50);
     chatBox.setFillColor(sf::Color(45, 45, 45));
@@ -103,6 +102,12 @@ int main() {
 
     std::string inputString;
 
+    // Pedir nombre de usuario
+    std::string username;
+    std::cout << "Introduce tu nombre de usuario: ";
+    std::cin >> username;
+    wsClient.sendUserName(username); // Enviar nombre de usuario al servidor
+
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -111,12 +116,12 @@ int main() {
             else if (event.type == sf::Event::TextEntered) {
                 if (event.text.unicode == 13) {
                     if (!inputString.empty()) {
-                        wsClient.sendMessage(inputString);
+                        wsClient.sendMessage(inputString); // Enviar mensaje al servidor
                         inputString.clear();
                     }
                 } else if (event.text.unicode == 8) {
                     if (!inputString.empty()) {
-                        inputString.pop_back();
+                        inputString.pop_back(); // Eliminar el último carácter al presionar "backspace"
                     }
                 } else {
                     inputString += static_cast<char>(event.text.unicode);
@@ -125,7 +130,7 @@ int main() {
                 if (event.mouseButton.button == sf::Mouse::Left) {
                     if (sendButton.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
                         if (!inputString.empty()) {
-                            wsClient.sendMessage(inputString);
+                            wsClient.sendMessage(inputString); // Enviar mensaje al servidor
                             inputString.clear();
                         }
                     }
@@ -137,29 +142,36 @@ int main() {
                     if (statusActivo.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
                         estadoActual = "ACTIVO";
                         currentStatus.setString("Estado: ACTIVO");
+                        wsClient.updateStatus(estadoActual); // Enviar estado al servidor
                     }
                     // Estado: OCUPADO
                     if (statusOcupado.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
                         estadoActual = "OCUPADO";
                         currentStatus.setString("Estado: OCUPADO");
+                        wsClient.updateStatus(estadoActual); // Enviar estado al servidor
                     }
                     // Estado: INACTIVO
                     if (statusInactivo.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
                         estadoActual = "INACTIVO";
                         currentStatus.setString("Estado: INACTIVO");
+                        wsClient.updateStatus(estadoActual); // Enviar estado al servidor
                     }
                 }
             }
         }
 
+        // Obtener mensajes del servidor y mostrarlos
         std::vector<std::string> messages = wsClient.getMessages();
         std::string chatHistory;
         for (const auto& msg : messages) {
             chatHistory += "📝 " + msg + "\n";
         }
+
+        // Actualizar la interfaz gráfica con los mensajes
         chatMessages.setString(chatHistory);
         inputText.setString(inputString);
 
+        // Obtener usuarios conectados
         std::vector<std::string> users = wsClient.getUsers();
         std::string userList;
         for (const auto& user : users) {
