@@ -1,128 +1,407 @@
-#include <libwebsockets.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <SFML/Network.hpp>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <mutex>
+#include <vector>
+#include <unordered_map>
+#include <set>
+#include <cstring>
+#include <cstdlib>
+#include <arpa/inet.h>
+#include <openssl/sha.h>
 
-#define MAX_CLIENTES 100
-#define MAX_MENSAJE 512
-
-struct per_session_data {
-    char username[50];
-    char estado[20];
+// Estructura para almacenar información de un cliente conectado
+struct ClientInfo {
+    sf::TcpSocket* socket;
+    uint8_t status;
 };
 
-static struct lws *clientes[MAX_CLIENTES];
-static struct per_session_data *datos[MAX_CLIENTES];
-static int cliente_count = 0;
+// Estructuras globales para manejo de clientes
+std::unordered_map<std::string, ClientInfo> clientes;
+std::set<std::string> todosUsuarios;
+std::mutex usersMutex;
+sf::TcpListener listener;
+bool serverRunning = true;
 
-void broadcast_mensaje(const char *msg) {
-    for (int i = 0; i < cliente_count; ++i) {
-        if (!clientes[i]) continue;
-        unsigned char buf[LWS_PRE + MAX_MENSAJE];
-        size_t len = strlen(msg);
-        if (len >= MAX_MENSAJE) len = MAX_MENSAJE - 1;
-        memcpy(&buf[LWS_PRE], msg, len);
-        lws_write(clientes[i], &buf[LWS_PRE], len, LWS_WRITE_TEXT);
+// GUID usada para el cálculo de Sec-WebSocket-Accept en el handshake
+const std::string WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+// Función para codificar datos en Base64
+std::string base64Encode(const std::vector<unsigned char>& data) {
+    static const char* base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    encoded.reserve(((data.size() + 2) / 3) * 4);
+    unsigned int val = 0;
+    int valb = -6;
+    for (unsigned char c : data) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            encoded.push_back(base64Chars[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
     }
+    if (valb > -6) {
+        encoded.push_back(base64Chars[((val << 8) >> (valb + 8)) & 0x3F]);
+    }
+    while (encoded.size() % 4) {
+        encoded.push_back('=');
+    }
+    return encoded;
 }
 
-static int callback_chat(struct lws *wsi, enum lws_callback_reasons reason,
-                         void *user, void *in, size_t len) {
-    struct per_session_data *psd = (struct per_session_data *)user;
+// Función para decodificar una cadena Base64 a bytes
+std::vector<unsigned char> base64Decode(const std::string& input) {
+    static const std::string base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<int> index(256, -1);
+    for (int i = 0; i < 64; ++i) {
+        index[base64Chars[i]] = i;
+    }
+    std::vector<unsigned char> output;
+    int val = 0;
+    int valb = -8;
+    for (unsigned char c : input) {
+        if (index[c] == -1) break;
+        val = (val << 6) + index[c];
+        valb += 6;
+        if (valb >= 0) {
+            output.push_back(char((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return output;
+}
 
-    switch (reason) {
-        case LWS_CALLBACK_ESTABLISHED:
-            if (cliente_count < MAX_CLIENTES) {
-                clientes[cliente_count] = wsi;
-                datos[cliente_count] = psd;
-                strcpy(psd->username, "Anónimo");
-                strcpy(psd->estado, "ACTIVO");
-                cliente_count++;
-                printf("🟢 Nuevo cliente conectado (%d)\n", cliente_count);
+// Función para enviar un frame WebSocket a un cliente (sin máscara)
+bool enviarFrame(sf::TcpSocket* socket, const std::vector<char>& data) {
+    std::vector<char> frame;
+    uint64_t dataLen = data.size();
+    frame.push_back(0x82); // Primer byte: FIN=1, opcode=2
+    if (dataLen <= 125) {
+        frame.push_back(static_cast<char>(dataLen));
+    } else if (dataLen <= 0xFFFF) {
+        frame.push_back(126);
+        uint16_t len16 = htons(static_cast<uint16_t>(dataLen));
+        frame.insert(frame.end(), reinterpret_cast<char*>(&len16), reinterpret_cast<char*>(&len16) + 2);
+    } else {
+        frame.push_back(127);
+        uint32_t high = htonl(static_cast<uint32_t>(dataLen >> 32));
+        uint32_t low = htonl(static_cast<uint32_t>(dataLen & 0xFFFFFFFF));
+        uint64_t netLen = ((uint64_t)low << 32) | high;
+        frame.insert(frame.end(), reinterpret_cast<char*>(&netLen), reinterpret_cast<char*>(&netLen) + 8);
+    }
+    frame.insert(frame.end(), data.begin(), data.end());
+    sf::Socket::Status status = socket->send(frame.data(), frame.size());
+    return (status == sf::Socket::Done);
+}
+
+// Función que maneja la comunicación con un cliente (se ejecuta en un thread por cliente)
+void atenderCliente(sf::TcpSocket* socket) {
+    sf::IpAddress clientIp = socket->getRemoteAddress();
+    unsigned short clientPort = socket->getRemotePort();
+    std::string nombreUsuario;
+
+    std::vector<char> notif;
+    std::vector<sf::TcpSocket*> recipients;
+
+    // Leer y procesar el handshake HTTP inicial del cliente
+    char buffer[1024];
+    std::string request = "";
+    std::size_t received;
+    sf::Socket::Status status;
+
+    while (true) {
+        status = socket->receive(buffer, sizeof(buffer) - 1, received);
+        if (status != sf::Socket::Done && status != sf::Socket::Partial) {
+            std::cerr << "Conexión cerrada antes de completar handshake (" 
+                      << clientIp.toString() << ":" << clientPort << ")\n";
+            delete socket;
+            return;
+        }
+        if (received > 0) {
+            buffer[received] = '\0';
+            request += buffer;
+            if (request.find("\r\n\r\n") != std::string::npos) break;
+        }
+        if (status == sf::Socket::Done && received == 0) {
+            delete socket;
+            return;
+        }
+    }
+
+    std::size_t posGet = request.find("GET ");
+    std::size_t posHTTP = request.find(" HTTP/1.1");
+    if (posGet == std::string::npos || posHTTP == std::string::npos) {
+        const char* badReq = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        socket->send(badReq, std::strlen(badReq));
+        socket->disconnect();
+        delete socket;
+        return;
+    }
+    std::string getLine = request.substr(posGet, posHTTP - posGet);
+    std::size_t posName = getLine.find("?name=");
+    if (posName == std::string::npos) {
+        const char* badReq = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        socket->send(badReq, std::strlen(badReq));
+        socket->disconnect();
+        delete socket;
+        return;
+    }
+    posName += 6;  
+    nombreUsuario = getLine.substr(posName);
+    if (!nombreUsuario.empty()) {
+        std::size_t posSpace = nombreUsuario.find(" ");
+        if (posSpace != std::string::npos) {
+            nombreUsuario = nombreUsuario.substr(0, posSpace);
+        }
+    }
+    if (nombreUsuario.empty() || nombreUsuario == "~") {
+        const char* badReq = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        socket->send(badReq, std::strlen(badReq));
+        socket->disconnect();
+        delete socket;
+        return;
+    }
+
+    std::string secKey;
+    std::size_t keyPos = request.find("Sec-WebSocket-Key:");
+    if (keyPos != std::string::npos) {
+        std::size_t keyEnd = request.find("\r\n", keyPos);
+        std::string keyLine = request.substr(keyPos, keyEnd - keyPos);
+        std::size_t colonPos = keyLine.find(":");
+        if (colonPos != std::string::npos) {
+            secKey = keyLine.substr(colonPos + 1);
+            while (!secKey.empty() && (secKey.front() == ' ' || secKey.front() == '\t')) {
+                secKey.erase(secKey.begin());
             }
-            break;
+        }
+    }
+    if (secKey.empty()) {
+        const char* badReq = "HTTP/1.1 400 Bad Request\r\n\r\n";
+        socket->send(badReq, std::strlen(badReq));
+        socket->disconnect();
+        delete socket;
+        return;
+    }
 
-        case LWS_CALLBACK_RECEIVE: {
-            char *mensaje = (char *)in;
-            printf("📨 Recibido: %s\n", mensaje);
+    bool nuevoUsuario = false;
+    {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        if (clientes.find(nombreUsuario) != clientes.end()) {
+            const char* conflict = "HTTP/1.1 400 Bad Request\r\n\r\n";
+            socket->send(conflict, std::strlen(conflict));
+            socket->disconnect();
+            delete socket;
+            return;
+        }
+        nuevoUsuario = (todosUsuarios.count(nombreUsuario) == 0);
+        todosUsuarios.insert(nombreUsuario);
+        clientes[nombreUsuario] = { socket, 1 };  // status 1: ACTIVO
+    }
 
-            if (strncmp(mensaje, "USERNAME:", 9) == 0) {
-                strncpy(psd->username, mensaje + 9, sizeof(psd->username) - 1);
-                psd->username[sizeof(psd->username) - 1] = '\0';
+    std::vector<unsigned char> keyBytes = base64Decode(secKey);
+    for (char c : WEBSOCKET_GUID) {
+        keyBytes.push_back(static_cast<unsigned char>(c));
+    }
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1(keyBytes.data(), keyBytes.size(), hash);
+    std::vector<unsigned char> hashVec(hash, hash + SHA_DIGEST_LENGTH);
+    std::string acceptKey = base64Encode(hashVec);
 
-                char aviso[100];
-                snprintf(aviso, sizeof(aviso), "🧑 %s se ha unido al chat.", psd->username);
-                broadcast_mensaje(aviso);
-            }
-            else if (strncmp(mensaje, "STATUS:", 7) == 0) {
-                strncpy(psd->estado, mensaje + 7, sizeof(psd->estado) - 1);
-                psd->estado[sizeof(psd->estado) - 1] = '\0';
+    std::string handshakeResponse =
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: " + acceptKey + "\r\n\r\n";
+    status = socket->send(handshakeResponse.c_str(), handshakeResponse.size());
+    if (status != sf::Socket::Done) {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        clientes.erase(nombreUsuario);
+        if (nuevoUsuario) {
+            todosUsuarios.erase(nombreUsuario);
+        }
+        std::cerr << "Error enviando respuesta de handshake a " << nombreUsuario << "\n";
+        socket->disconnect();
+        delete socket;
+        return;
+    }
+    std::cout << "Usuario \"" << nombreUsuario << "\" conectado (" 
+              << clientIp.toString() << ":" << clientPort << ")\n";
 
-                char estado_msg[100];
-                snprintf(estado_msg, sizeof(estado_msg), "📢 %s ahora está %s", psd->username, psd->estado);
-                broadcast_mensaje(estado_msg);
-            }
-            else {
-                char envio[300];
-                snprintf(envio, sizeof(envio), "%s: %s", psd->username, mensaje);
-                broadcast_mensaje(envio);
-            }
+    // Notificar a los demás usuarios que este usuario se ha conectado
+    notif.push_back(nuevoUsuario ? 53 : 54);
+    uint8_t nameLen = nombreUsuario.size();
+    notif.push_back(static_cast<char>(nameLen));
+    notif.insert(notif.end(), nombreUsuario.begin(), nombreUsuario.end());
+    uint8_t statusByte = 1;  // ACTIVO
+    notif.push_back(static_cast<char>(statusByte));
+
+    for (auto& par : clientes) {
+        if (par.first != nombreUsuario) {
+            recipients.push_back(par.second.socket);
+        }
+    }
+
+    // Enviar la notificación a todos los destinatarios
+    for (sf::TcpSocket* sock : recipients) {
+        enviarFrame(sock, notif);
+    }
+
+    // Ciclo para recibir mensajes del cliente
+    while (serverRunning) {
+        // Leer encabezado de frame (2 bytes)
+        char hdr[2];
+        std::size_t hdrReceived;
+        status = socket->receive(hdr, 2, hdrReceived);
+        if (status == sf::Socket::Disconnected || status == sf::Socket::Error) {
             break;
         }
-
-        case LWS_CALLBACK_CLOSED:
-            for (int i = 0; i < cliente_count; ++i) {
-                if (clientes[i] == wsi) {
-                    char msg[100];
-                    snprintf(msg, sizeof(msg), "❌ %s se ha desconectado.", datos[i]->username);
-                    broadcast_mensaje(msg);
-
-                    for (int j = i; j < cliente_count - 1; ++j) {
-                        clientes[j] = clientes[j + 1];
-                        datos[j] = datos[j + 1];
+        if (status == sf::Socket::Partial) {
+            continue;
+        }
+        if (hdrReceived < 2) {
+            continue;
+        }
+        bool fin = (hdr[0] & 0x80) != 0;
+        uint8_t opcode = hdr[0] & 0x0F;
+        bool masked = (hdr[1] & 0x80) != 0;  // (debe ser 1 para frames de cliente)
+        uint64_t payloadLen = hdr[1] & 0x7F;
+        if (payloadLen == 126) {
+            char ext[2];
+            socket->receive(ext, 2, hdrReceived);
+            if (hdrReceived < 2) continue;
+            uint16_t len16;
+            std::memcpy(&len16, ext, 2);
+            payloadLen = ntohs(len16);
+        } else if (payloadLen == 127) {
+            char ext[8];
+            socket->receive(ext, 8, hdrReceived);
+            if (hdrReceived < 8) continue;
+            uint64_t len64;
+            std::memcpy(&len64, ext, 8);
+            uint64_t high_part = ntohl(static_cast<uint32_t>(len64 >> 32));
+            uint64_t low_part = ntohl(static_cast<uint32_t>(len64 & 0xFFFFFFFF));
+            payloadLen = (low_part << 32) | high_part;
+        }
+        uint8_t maskKey[4] = {0,0,0,0};
+        if (masked) {
+            char maskBytes[4];
+            socket->receive(maskBytes, 4, hdrReceived);
+            if (hdrReceived < 4) continue;
+            std::memcpy(maskKey, maskBytes, 4);
+        }
+        std::vector<char> payload;
+        payload.resize(payloadLen);
+        std::size_t offset = 0;
+        while (offset < payloadLen) {
+            status = socket->receive(payload.data() + offset, payloadLen - offset, hdrReceived);
+            if (status == sf::Socket::Disconnected || status == sf::Socket::Error) {
+                offset = 0;
+                break;
+            }
+            if (status != sf::Socket::Done && status != sf::Socket::Partial) {
+                break;
+            }
+            offset += hdrReceived;
+        }
+        if (offset < payloadLen) {
+            break;
+        }
+        if (masked) {
+            for (uint64_t i = 0; i < payloadLen; ++i) {
+                payload[i] ^= maskKey[i % 4];
+            }
+        }
+        if (!fin) {
+            continue;  // no soportamos frames fragmentados en este servidor
+        }
+        if (opcode == 0x8) {  // frame de cierre de cliente
+            break;
+        }
+        if (opcode != 0x1 && opcode != 0x2) {
+            continue;  // ignorar frames que no sean texto/binario
+        }
+        if (payload.empty()) continue;
+        uint8_t codigo = static_cast<uint8_t>(payload[0]);
+        if (codigo == 1) {
+            // Listar usuarios conectados actualmente
+            std::vector<char> respuesta;
+            respuesta.push_back(51);
+            std::vector<std::pair<std::string, uint8_t>> lista;
+            {
+                std::lock_guard<std::mutex> lock(usersMutex);
+                for (const auto& nombre : todosUsuarios) {
+                    uint8_t stat = 0;
+                    auto it = clientes.find(nombre);
+                    if (it != clientes.end()) {
+                        stat = it->second.status;
                     }
-                    cliente_count--;
-                    break;
+                    lista.emplace_back(nombre, stat);
                 }
             }
-            break;
-
-        default:
-            break;
+            uint8_t numUsuarios = lista.size();
+            respuesta.push_back(static_cast<char>(numUsuarios));
+            for (auto& [nombre, stat] : lista) {
+                uint8_t nameLen = nombre.size();
+                respuesta.push_back(static_cast<char>(nameLen));
+                respuesta.insert(respuesta.end(), nombre.begin(), nombre.end());
+                respuesta.push_back(static_cast<char>(stat));
+            }
+            enviarFrame(socket, respuesta);
+        } else {
+            // Lógica para manejar otros códigos (enviar mensaje, cambio de estado, etc.)
+        }
     }
-    return 0;
+
+    // Salir del bucle: el cliente cerró la conexión
+    socket->disconnect();
+    {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        clientes.erase(nombreUsuario);
+    }
+
+    // Notificar a los demás usuarios que este usuario se desconectó
+    notif.push_back(54);
+    notif.push_back(static_cast<char>(nameLen));
+    notif.insert(notif.end(), nombreUsuario.begin(), nombreUsuario.end());
+    notif.push_back(0);  // estado 0: DESCONECTADO
+    recipients.clear();
+    {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        for (auto& par : clientes) {
+            recipients.push_back(par.second.socket);
+        }
+    }
+    for (sf::TcpSocket* sock : recipients) {
+        enviarFrame(sock, notif);
+    }
+    std::cout << "Usuario \"" << nombreUsuario << "\" desconectado\n";
+    delete socket;
 }
 
-static struct lws_protocols protocols[] = {
-    {
-        "chat",
-        callback_chat,
-        sizeof(struct per_session_data),
-        MAX_MENSAJE
-    },
-    { NULL, NULL, 0, 0 }
-};
-
-int main(void) {
-    struct lws_context_creation_info info;
-    struct lws_context *context;
-
-    memset(&info, 0, sizeof(info));
-    info.port = 8080;
-    info.protocols = protocols;
-
-    context = lws_create_context(&info);
-    if (!context) {
-        fprintf(stderr, "❌ Error al crear el contexto WebSocket\n");
-        return -1;
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "Uso: " << argv[0] << " <puerto>\n";
+        return 1;
     }
-
-    printf("🌐 Servidor WebSocket listo en ws://localhost:8080\n");
-
-    while (1) {
-        lws_service(context, 0);
+    unsigned short puerto = std::atoi(argv[1]);
+    if (listener.listen(puerto) != sf::Socket::Done) {
+        std::cerr << "Error: no se pudo iniciar el servidor en el puerto " << puerto << "\n";
+        return 1;
     }
-
-    lws_context_destroy(context);
+    std::cout << "Servidor escuchando en el puerto " << puerto << "...\n";
+    while (serverRunning) {
+        sf::TcpSocket* nuevoCliente = new sf::TcpSocket;
+        if (listener.accept(*nuevoCliente) == sf::Socket::Done) {
+            std::thread t(atenderCliente, nuevoCliente);
+            t.detach();
+        } else {
+            delete nuevoCliente;
+            std::cerr << "Error al aceptar una nueva conexión.\n";
+            break;
+        }
+    }
+    listener.close();
     return 0;
 }
