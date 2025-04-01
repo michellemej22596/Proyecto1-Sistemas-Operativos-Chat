@@ -5,10 +5,18 @@
 
 sf::Font loadFont() {
     sf::Font font;
-    if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
-        std::cerr << "⚠ No se pudo cargar la fuente." << std::endl;
+
+#ifdef __APPLE__
+    const std::string fontPath = "/System/Library/Fonts/Supplemental/Arial.ttf";
+#else
+    const std::string fontPath = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
+#endif
+
+    if (!font.loadFromFile(fontPath)) {
+        std::cerr << "⚠ No se pudo cargar la fuente desde: " << fontPath << std::endl;
         exit(1);
     }
+
     return font;
 }
 
@@ -27,7 +35,7 @@ int main() {
 
     std::string destinatarioActual = "~";  // "~" representa chat general
 
-    sf::RenderWindow window(sf::VideoMode(900, 600), "💬 Chat Cliente", sf::Style::Titlebar | sf::Style::Close);
+    sf::RenderWindow window(sf::VideoMode(900, 600), "Chat Cliente", sf::Style::Titlebar | sf::Style::Close);
     sf::Font font = loadFont();
 
     sf::RectangleShape chatBox({600, 400});
