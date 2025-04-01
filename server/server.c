@@ -428,8 +428,40 @@ void atenderCliente(sf::TcpSocket* socket) {
                 respuesta.push_back(static_cast<char>(stat));
             }
             enviarFrame(socket, respuesta);
+        
+        } else if (codigo == 2) {
+            // Cambio de estado
+            if (payload.size() >= 2 && payload[1] >= 1 && payload[1] <= 3) {
+                uint8_t nuevoEstado = payload[1];
+                cambiarEstado(nombreUsuario, nuevoEstado);
+                std::cout << "[Cambio de estado] " << nombreUsuario << " ahora está ";
+                if (nuevoEstado == 1) std::cout << "ACTIVO\n";
+                else if (nuevoEstado == 2) std::cout << "OCUPADO\n";
+                else if (nuevoEstado == 3) std::cout << "INACTIVO\n";
+            }
+        
+        } else if (codigo == 5) {
+            // Mensaje privado
+            manejarMensajePrivado(nombreUsuario, payload);
+            std::cout << "[Privado] " << nombreUsuario << " → otro usuario\n";
+        
         } else {
-            // Lógica para manejar otros códigos (enviar mensaje, cambio de estado, etc.)
+            // Mensaje general (difusión)
+            std::string msg(payload.begin() + 1, payload.end());
+            std::lock_guard<std::mutex> lock(usersMutex);
+            for (auto& [otroNombre, info] : clientes) {
+                if (otroNombre != nombreUsuario) {
+                    std::vector<char> frame;
+                    frame.push_back(55); // código mensaje
+                    frame.push_back(nombreUsuario.size());
+                    frame.insert(frame.end(), nombreUsuario.begin(), nombreUsuario.end());
+                    frame.push_back(msg.size());
+                    frame.insert(frame.end(), msg.begin(), msg.end());
+                    enviarFrame(info.socket, frame);
+                    historial[otroNombre].push_back(nombreUsuario + ": " + msg);
+                }
+            }
+            std::cout << "[Mensaje] " << nombreUsuario << ": " << msg << "\n";
         }
     }
 
