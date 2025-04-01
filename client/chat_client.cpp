@@ -3,7 +3,6 @@
 #include <iostream>
 #include "websocket_client.hpp"
 
-// Cargar fuente del sistema
 sf::Font loadFont() {
     sf::Font font;
     if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
@@ -26,10 +25,11 @@ int main() {
         return 1;
     }
 
+    std::string destinatarioActual = "~";  // "~" representa chat general
+
     sf::RenderWindow window(sf::VideoMode(900, 600), "💬 Chat Cliente", sf::Style::Titlebar | sf::Style::Close);
     sf::Font font = loadFont();
 
-    // UI elementos
     sf::RectangleShape chatBox({600, 400});
     chatBox.setPosition(20, 50);
     chatBox.setFillColor(sf::Color(45, 45, 45));
@@ -56,6 +56,10 @@ int main() {
     inputText.setPosition(30, 515);
     inputText.setFillColor(sf::Color::White);
 
+    sf::Text recipientText("Enviando a: Todos", font, 18);
+    recipientText.setPosition(30, 480);
+    recipientText.setFillColor(sf::Color::Cyan);
+
     sf::Text chatMessages("", font, 18);
     chatMessages.setPosition(30, 60);
     chatMessages.setFillColor(sf::Color::White);
@@ -78,7 +82,6 @@ int main() {
     closeButtonText.setPosition(20, 15);
     closeButtonText.setFillColor(sf::Color::White);
 
-    // Estado actual y botones
     std::string estadoActual = "ACTIVO";
     sf::Text currentStatus("Estado: ACTIVO", font, 16);
     currentStatus.setPosition(420, 565);
@@ -111,7 +114,7 @@ int main() {
                 wsClient.close();
             } else if (event.type == sf::Event::TextEntered) {
                 if (event.text.unicode == 13 && !inputString.empty()) {
-                    wsClient.sendMessage(inputString);
+                    wsClient.sendMessage(destinatarioActual, inputString);
                     inputString.clear();
                 } else if (event.text.unicode == 8 && !inputString.empty()) {
                     inputString.pop_back();
@@ -121,7 +124,7 @@ int main() {
             } else if (event.type == sf::Event::MouseButtonPressed && event.mouseButton.button == sf::Mouse::Left) {
                 if (sendButton.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
                     if (!inputString.empty()) {
-                        wsClient.sendMessage(inputString);
+                        wsClient.sendMessage(destinatarioActual, inputString);
                         inputString.clear();
                     }
                 }
@@ -134,6 +137,23 @@ int main() {
                         estadoActual = estados[i];
                         currentStatus.setString("Estado: " + estadoActual);
                         wsClient.updateStatus(estadoActual);
+                    }
+                }
+
+                if (usersTitle.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
+                    destinatarioActual = "~";
+                    recipientText.setString("Enviando a: Todos");
+                } else {
+                    std::vector<std::string> users = wsClient.getUsers();
+                    float yStart = 60;
+                    float lineHeight = 20;
+                    for (int i = 0; i < users.size(); ++i) {
+                        float userY = yStart + i * lineHeight;
+                        if (event.mouseButton.x >= 640 && event.mouseButton.x <= 880 &&
+                            event.mouseButton.y >= userY && event.mouseButton.y <= userY + lineHeight) {
+                            destinatarioActual = users[i];
+                            recipientText.setString("Enviando a: " + destinatarioActual);
+                        }
                     }
                 }
             }
@@ -158,6 +178,7 @@ int main() {
         window.draw(usersTitle);
         window.draw(userListText);
         window.draw(inputBox);
+        window.draw(recipientText);  // ⬅ muestra a quién se envía
         window.draw(inputText);
         window.draw(sendButton);
         window.draw(sendButtonText);
@@ -171,7 +192,6 @@ int main() {
         window.display();
     }
 
-    wsClient.close();  // Asegura el cierre si el bucle terminó
-
+    wsClient.close();
     return 0;
 }

@@ -10,7 +10,6 @@
 WebSocketClient::WebSocketClient(const std::string& url) {
     running = false;
 
-    // Extraer nombre de usuario de la URL
     std::size_t namePos = url.find("?name=");
     if (namePos != std::string::npos) {
         username = url.substr(namePos + 6);
@@ -32,6 +31,9 @@ WebSocketClient::WebSocketClient(const std::string& url) {
 
     running = true;
     receiverThread = std::thread(&WebSocketClient::receiveLoop, this);
+
+    std::vector<char> listRequest = {1};
+    sendBinaryFrame(listRequest);
 }
 
 WebSocketClient::~WebSocketClient() {
@@ -67,11 +69,11 @@ bool WebSocketClient::performHandshake(const std::string& url) {
 
 void WebSocketClient::sendBinaryFrame(const std::vector<char>& data) {
     std::vector<char> frame;
-    frame.push_back(0x82); // FIN = 1, opcode = 2 (binary)
+    frame.push_back(0x82);
 
     size_t len = data.size();
     if (len <= 125) {
-        frame.push_back(static_cast<char>(len | 0x80)); // with mask
+        frame.push_back(static_cast<char>(len | 0x80));
     } else if (len <= 65535) {
         frame.push_back(126 | 0x80);
         frame.push_back((len >> 8) & 0xFF);
@@ -91,11 +93,11 @@ void WebSocketClient::sendBinaryFrame(const std::vector<char>& data) {
     socket.send(frame.data(), frame.size());
 }
 
-void WebSocketClient::sendMessage(const std::string& message) {
+void WebSocketClient::sendMessage(const std::string& recipient, const std::string& message) {
     std::vector<char> payload;
-    payload.push_back(5); // código de mensaje privado
-    payload.push_back(username.size());
-    payload.insert(payload.end(), username.begin(), username.end());
+    payload.push_back(5);
+    payload.push_back(recipient.size());
+    payload.insert(payload.end(), recipient.begin(), recipient.end());
     payload.push_back(message.size());
     payload.insert(payload.end(), message.begin(), message.end());
 
@@ -104,7 +106,7 @@ void WebSocketClient::sendMessage(const std::string& message) {
 
 void WebSocketClient::updateStatus(const std::string& status) {
     std::vector<char> payload;
-    payload.push_back(2); // código para cambio de estado
+    payload.push_back(2);
 
     if (status == "ACTIVO") payload.push_back(1);
     else if (status == "OCUPADO") payload.push_back(2);
@@ -181,10 +183,11 @@ void WebSocketClient::parseFrame(const std::vector<char>& frameData) {
     uint8_t code = static_cast<uint8_t>(frameData[0]);
     std::lock_guard<std::mutex> lock(dataMutex);
 
-    if (code == 50) { // error
+    if (code == 50) {
         std::string msg(frameData.begin() + 2, frameData.end());
-        messages.push_back("⚠️ Error: " + msg);
-    } else if (code == 51) { // lista de usuarios
+        messages.push_back("[Error] " + msg);
+
+    } else if (code == 51) {
         users.clear();
         uint8_t count = frameData[1];
         size_t idx = 2;
@@ -192,25 +195,51 @@ void WebSocketClient::parseFrame(const std::vector<char>& frameData) {
             uint8_t len = frameData[idx++];
             std::string name(frameData.begin() + idx, frameData.begin() + idx + len);
             users.push_back(name);
-            idx += len + 1; // nombre + status
+            idx += len + 1;
         }
-    } else if (code == 55) { // mensaje privado
+
+    } else if (code == 53) {
+        uint8_t len = frameData[1];
+        std::string name(frameData.begin() + 2, frameData.begin() + 2 + len);
+        users.push_back(name);
+        messages.push_back("[Nuevo] Usuario " + name + " se ha conectado");
+
+    } else if (code == 54) {
+        uint8_t len = frameData[1];
+        std::string name(frameData.begin() + 2, frameData.begin() + 2 + len);
+        uint8_t newStatus = frameData[2 + len];
+
+        std::string estadoTexto;
+        if (newStatus == 0) {
+            estadoTexto = "se ha desconectado";
+            auto it = std::find(users.begin(), users.end(), name);
+            if (it != users.end()) users.erase(it);
+        } else if (newStatus == 1) estadoTexto = "ahora está ACTIVO";
+        else if (newStatus == 2) estadoTexto = "ahora está OCUPADO";
+        else if (newStatus == 3) estadoTexto = "ahora está INACTIVO";
+        else estadoTexto = "tiene un estado desconocido";
+
+        messages.push_back("[Estado] " + name + " " + estadoTexto);
+
+    } else if (code == 55) {
         uint8_t nameLen = frameData[1];
         std::string sender(frameData.begin() + 2, frameData.begin() + 2 + nameLen);
         uint8_t msgLen = frameData[2 + nameLen];
         std::string msg(frameData.begin() + 3 + nameLen, frameData.begin() + 3 + nameLen + msgLen);
         messages.push_back(sender + ": " + msg);
-    } else if (code == 56) { // historial
+
+    } else if (code == 56) {
         uint8_t count = frameData[1];
         size_t idx = 2;
         for (int i = 0; i < count && idx < frameData.size(); ++i) {
             uint8_t len = frameData[idx++];
             std::string msg(frameData.begin() + idx, frameData.begin() + idx + len);
-            messages.push_back("📜 " + msg);
+            messages.push_back("[Historial] " + msg);
             idx += len;
         }
+
     } else {
-        messages.push_back("📩 Mensaje recibido (código desconocido): " + std::to_string(code));
+        messages.push_back("[Info] Mensaje recibido (código desconocido): " + std::to_string(code));
     }
 }
 

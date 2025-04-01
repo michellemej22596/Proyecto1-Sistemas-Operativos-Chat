@@ -13,7 +13,7 @@ public:
     ~WebSocketClient();
 
     void sendUserName(const std::string& username);
-    void sendMessage(const std::string& message);
+    void sendMessage(const std::string& recipient, const std::string& message);
     void updateStatus(const std::string& status);
     std::vector<std::string> getMessages();
     std::vector<std::string> getUsers();
