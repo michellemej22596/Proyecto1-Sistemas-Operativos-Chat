@@ -1,32 +1,111 @@
 #include <SFML/Network.hpp>
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <mutex>
 #include <vector>
 #include <unordered_map>
 #include <set>
+#include <map>
 #include <cstring>
 #include <cstdlib>
+#include <ctime>
 #include <arpa/inet.h>
 #include <openssl/sha.h>
 
-// Estructura para almacenar información de un cliente conectado
 struct ClientInfo {
     sf::TcpSocket* socket;
     uint8_t status;
 };
 
-// Estructuras globales para manejo de clientes
 std::unordered_map<std::string, ClientInfo> clientes;
 std::set<std::string> todosUsuarios;
+std::map<std::string, std::vector<std::string>> historial;
 std::mutex usersMutex;
 sf::TcpListener listener;
 bool serverRunning = true;
 
-// GUID usada para el cálculo de Sec-WebSocket-Accept en el handshake
 const std::string WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
+std::string base64Encode(const std::vector<unsigned char>& data); // definida como antes
+std::vector<unsigned char> base64Decode(const std::string& input); // definida como antes
+bool enviarFrame(sf::TcpSocket* socket, const std::vector<char>& data); // definida como antes
+
+void registrarLog(const std::string& evento) {
+    std::ofstream log("registro.log", std::ios::app);
+    std::time_t ahora = std::time(nullptr);
+    log << std::ctime(&ahora) << " - " << evento << "\n";
+}
+
+void enviarError(sf::TcpSocket* socket, const std::string& mensaje) {
+    std::vector<char> err;
+    err.push_back(50);
+    err.push_back(mensaje.size());
+    err.insert(err.end(), mensaje.begin(), mensaje.end());
+    enviarFrame(socket, err);
+}
+
+void responderInfoUsuario(sf::TcpSocket* socket, const std::string& nombre) {
+    std::vector<char> respuesta;
+    respuesta.push_back(52);
+    respuesta.push_back(nombre.size());
+    respuesta.insert(respuesta.end(), nombre.begin(), nombre.end());
+    {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        auto it = clientes.find(nombre);
+        uint8_t estado = (it != clientes.end()) ? it->second.status : 0;
+        respuesta.push_back(estado);
+    }
+    enviarFrame(socket, respuesta);
+}
+
+void enviarHistorial(sf::TcpSocket* socket, const std::string& nombre) {
+    std::vector<char> frame;
+    frame.push_back(56);
+    std::lock_guard<std::mutex> lock(usersMutex);
+    auto& mensajes = historial[nombre];
+    frame.push_back(mensajes.size());
+    for (auto& m : mensajes) {
+        frame.push_back(m.size());
+        frame.insert(frame.end(), m.begin(), m.end());
+    }
+    enviarFrame(socket, frame);
+}
+
+void manejarMensajePrivado(const std::string& origen, const std::vector<char>& payload) {
+    if (payload.size() < 4) return;
+    std::string destino(payload.begin() + 2, payload.begin() + 2 + payload[1]);
+    std::string mensaje(payload.begin() + 2 + payload[1], payload.end());
+    std::lock_guard<std::mutex> lock(usersMutex);
+    if (clientes.find(destino) == clientes.end()) return;
+    std::vector<char> respuesta;
+    respuesta.push_back(55);
+    respuesta.push_back(payload[1]);
+    respuesta.insert(respuesta.end(), destino.begin(), destino.end());
+    respuesta.push_back(mensaje.size());
+    respuesta.insert(respuesta.end(), mensaje.begin(), mensaje.end());
+    enviarFrame(clientes[destino].socket, respuesta);
+    historial[destino].push_back(origen + ": " + mensaje);
+}
+
+void cambiarEstado(const std::string& nombreUsuario, uint8_t nuevoEstado) {
+    std::lock_guard<std::mutex> lock(usersMutex);
+    auto it = clientes.find(nombreUsuario);
+    if (it != clientes.end()) {
+        it->second.status = nuevoEstado;
+        std::vector<char> notif;
+        notif.push_back(54);
+        notif.push_back(nombreUsuario.size());
+        notif.insert(notif.end(), nombreUsuario.begin(), nombreUsuario.end());
+        notif.push_back(nuevoEstado);
+        for (auto& [nombre, cliente] : clientes) {
+            if (nombre != nombreUsuario) {
+                enviarFrame(cliente.socket, notif);
+            }
+        }
+    }
+}
 // Función para codificar datos en Base64
 std::string base64Encode(const std::vector<unsigned char>& data) {
     static const char* base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
