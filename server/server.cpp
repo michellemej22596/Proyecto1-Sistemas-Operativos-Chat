@@ -22,6 +22,7 @@ struct ClientInfo {
 std::unordered_map<std::string, ClientInfo> clientes;
 std::set<std::string> todosUsuarios;
 std::map<std::string, std::vector<std::string>> historial;
+std::vector<std::string> historialGlobal;  
 std::mutex usersMutex;
 sf::TcpListener listener;
 bool serverRunning = true;
@@ -102,9 +103,7 @@ void cambiarEstado(const std::string& nombreUsuario, uint8_t nuevoEstado) {
         notif.insert(notif.end(), nombreUsuario.begin(), nombreUsuario.end());
         notif.push_back(nuevoEstado);
         for (auto& [nombre, cliente] : clientes) {
-            if (nombre != nombreUsuario) {
-                enviarFrame(cliente.socket, notif);
-            }
+            enviarFrame(cliente.socket, notif);  
         }
     }
 }
@@ -406,10 +405,11 @@ void atenderCliente(sf::TcpSocket* socket) {
         if (payload.empty()) continue;
         uint8_t codigo = static_cast<uint8_t>(payload[0]);
         if (codigo == 1) {
-            // Listar usuarios conectados actualmente
+                // Listar usuarios conectados actualmente
             std::vector<char> respuesta;
             respuesta.push_back(51);
             std::vector<std::pair<std::string, uint8_t>> lista;
+
             {
                 std::lock_guard<std::mutex> lock(usersMutex);
                 for (const auto& nombre : todosUsuarios) {
@@ -421,6 +421,7 @@ void atenderCliente(sf::TcpSocket* socket) {
                     lista.emplace_back(nombre, stat);
                 }
             }
+
             uint8_t numUsuarios = lista.size();
             respuesta.push_back(static_cast<char>(numUsuarios));
             for (auto& [nombre, stat] : lista) {
@@ -429,7 +430,20 @@ void atenderCliente(sf::TcpSocket* socket) {
                 respuesta.insert(respuesta.end(), nombre.begin(), nombre.end());
                 respuesta.push_back(static_cast<char>(stat));
             }
-            enviarFrame(socket, respuesta);
+
+            enviarFrame(socket, respuesta);  // ✅ ya mandaste código 51
+
+           
+            // Enviar historial grupal si existe
+            if (!historialGlobal.empty()) {
+                std::vector<char> frame = {56, static_cast<char>(historialGlobal.size())};
+                for (const auto& msg : historialGlobal) {
+                    frame.push_back(static_cast<char>(msg.size()));
+                    frame.insert(frame.end(), msg.begin(), msg.end());
+                }
+                enviarFrame(socket, frame);  // ✅ código 56
+            }
+            
         
         } else if (codigo == 2) {
             // Cambio de estado
@@ -443,35 +457,56 @@ void atenderCliente(sf::TcpSocket* socket) {
             }
         
         } else if (codigo == 5) {
+            if (payload.size() == 1) {
+                // Solicitud manual de historial grupal
+                if (!historialGlobal.empty()) {
+                    std::vector<char> frame = {56, static_cast<char>(historialGlobal.size())};
+                    for (const auto& msg : historialGlobal) {
+                        frame.push_back(static_cast<char>(msg.size()));
+                        frame.insert(frame.end(), msg.begin(), msg.end());
+                    }
+                    enviarFrame(socket, frame);
+                }
+                continue;
+            }
+
             if (payload.size() < 4) continue;
-            std::string destinatario(payload.begin() + 2, payload.begin() + 2 + payload[1]);
+
             uint8_t nombreLen = payload[1];
+            std::string destinatario(payload.begin() + 2, payload.begin() + 2 + nombreLen);
             uint8_t mensajeLen = payload[2 + nombreLen];
             std::string mensaje(payload.begin() + 3 + nombreLen, payload.begin() + 3 + nombreLen + mensajeLen);
-        
+
+            std::cout << "➡️  Recibido mensaje: de '" << nombreUsuario
+                    << "' para '" << destinatario 
+                    << "' (len=" << (int)nombreLen << "): " << mensaje << "\n";
+
             if (destinatario == "~") {
-                //  Mensaje general
-                std::lock_guard<std::mutex> lock(usersMutex);
-                for (auto& [otroNombre, info] : clientes) {
-                    if (otroNombre != nombreUsuario) {
-                        std::vector<char> frame;
-                        frame.push_back(55);
-                        frame.push_back(nombreUsuario.size());
-                        frame.insert(frame.end(), nombreUsuario.begin(), nombreUsuario.end());
-                        frame.push_back(mensaje.size());
-                        frame.insert(frame.end(), mensaje.begin(), mensaje.end());
+                // ✅ Mensaje general
+                std::string completo = nombreUsuario + ": " + mensaje;
+                historialGlobal.push_back(completo);  // ✅ guardar en historial general
+
+                std::vector<char> frame = {55, static_cast<char>(nombreUsuario.size())};
+                frame.insert(frame.end(), nombreUsuario.begin(), nombreUsuario.end());
+                frame.push_back(static_cast<char>(mensaje.size()));
+                frame.insert(frame.end(), mensaje.begin(), mensaje.end());
+
+                // ✅ Enviar a todos, incluyendo al emisor
+                {
+                    std::lock_guard<std::mutex> lock(usersMutex);
+                    for (auto& [otroNombre, info] : clientes) {
                         enviarFrame(info.socket, frame);
-                        historial[otroNombre].push_back(nombreUsuario + ": " + mensaje);
                     }
                 }
-                std::cout << "[Mensaje General] " << nombreUsuario << ": " << mensaje << "\n";
+
+                std::cout << "[Mensaje General] " << completo << "\n";
             } else {
-                //  Mensaje privado
+                // 🔒 Mensaje privado
                 manejarMensajePrivado(nombreUsuario, payload);
                 std::cout << "[Privado] " << nombreUsuario << " → " << destinatario << ": " << mensaje << "\n";
             }
-        
-        } else {
+        }
+        else {
             // Mensaje general (difusión)
             std::string msg(payload.begin() + 1, payload.end());
             std::lock_guard<std::mutex> lock(usersMutex);

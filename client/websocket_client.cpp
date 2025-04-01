@@ -194,22 +194,41 @@ void WebSocketClient::parseFrame(const std::vector<char>& frameData) {
         size_t idx = 2;
         for (int i = 0; i < count && idx + 1 < frameData.size(); ++i) {
             uint8_t len = frameData[idx++];
+            if (idx + len >= frameData.size()) break;
+
             std::string name(frameData.begin() + idx, frameData.begin() + idx + len);
             idx += len;
-            uint8_t status = frameData[idx++];
-            users.emplace_back(name, status);
-        }
 
-    } else if (code == 53) {
+            uint8_t estado = frameData[idx++];  
+            users.emplace_back(name, estado);   
+
+    } } else if (code == 53) {
         uint8_t len = frameData[1];
         std::string name(frameData.begin() + 2, frameData.begin() + 2 + len);
-        users.emplace_back(name, 1);
+        if (std::none_of(users.begin(), users.end(),
+        [&name](const std::pair<std::string, uint8_t>& u) { return u.first == name; }))
+        {
+            users.emplace_back(name, 1);  // Estado por defecto: ACTIVO
+        }
         messages.push_back("[Nuevo] Usuario " + name + " se ha conectado");
 
     } else if (code == 54) {
         uint8_t len = frameData[1];
         std::string name(frameData.begin() + 2, frameData.begin() + 2 + len);
         uint8_t newStatus = frameData[2 + len];
+        
+        if (name == username) {
+        auto it = std::find_if(users.begin(), users.end(),
+            [&name](const std::pair<std::string, uint8_t>& u) {
+                return u.first == name;
+            });
+
+        if (it != users.end()) {
+            it->second = newStatus;
+        } else {
+            users.emplace_back(name, newStatus);
+        }
+         }
 
         // Actualizar o remover usuario
         auto it = std::find_if(users.begin(), users.end(),
@@ -264,3 +283,4 @@ void WebSocketClient::close() {
     if (receiverThread.joinable())
         receiverThread.join();
 }
+
