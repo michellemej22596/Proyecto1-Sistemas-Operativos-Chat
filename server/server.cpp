@@ -443,9 +443,33 @@ void atenderCliente(sf::TcpSocket* socket) {
             }
         
         } else if (codigo == 5) {
-            // Mensaje privado
-            manejarMensajePrivado(nombreUsuario, payload);
-            std::cout << "[Privado] " << nombreUsuario << " → otro usuario\n";
+            if (payload.size() < 4) continue;
+            std::string destinatario(payload.begin() + 2, payload.begin() + 2 + payload[1]);
+            uint8_t nombreLen = payload[1];
+            uint8_t mensajeLen = payload[2 + nombreLen];
+            std::string mensaje(payload.begin() + 3 + nombreLen, payload.begin() + 3 + nombreLen + mensajeLen);
+        
+            if (destinatario == "~") {
+                //  Mensaje general
+                std::lock_guard<std::mutex> lock(usersMutex);
+                for (auto& [otroNombre, info] : clientes) {
+                    if (otroNombre != nombreUsuario) {
+                        std::vector<char> frame;
+                        frame.push_back(55);
+                        frame.push_back(nombreUsuario.size());
+                        frame.insert(frame.end(), nombreUsuario.begin(), nombreUsuario.end());
+                        frame.push_back(mensaje.size());
+                        frame.insert(frame.end(), mensaje.begin(), mensaje.end());
+                        enviarFrame(info.socket, frame);
+                        historial[otroNombre].push_back(nombreUsuario + ": " + mensaje);
+                    }
+                }
+                std::cout << "[Mensaje General] " << nombreUsuario << ": " << mensaje << "\n";
+            } else {
+                //  Mensaje privado
+                manejarMensajePrivado(nombreUsuario, payload);
+                std::cout << "[Privado] " << nombreUsuario << " → " << destinatario << ": " << mensaje << "\n";
+            }
         
         } else {
             // Mensaje general (difusión)
