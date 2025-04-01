@@ -76,7 +76,9 @@ void enviarHistorial(sf::TcpSocket* socket, const std::string& nombre) {
 void manejarMensajePrivado(const std::string& origen, const std::vector<char>& payload) {
     if (payload.size() < 4) return;
     std::string destino(payload.begin() + 2, payload.begin() + 2 + payload[1]);
-    std::string mensaje(payload.begin() + 2 + payload[1], payload.end());
+    uint8_t nombreLen = payload[1];
+    uint8_t mensajeLen = payload[2 + nombreLen];
+    std::string mensaje(payload.begin() + 3 + nombreLen, payload.begin() + 3 + nombreLen + mensajeLen);
     std::lock_guard<std::mutex> lock(usersMutex);
     if (clientes.find(destino) == clientes.end()) return;
     std::vector<char> respuesta;
