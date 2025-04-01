@@ -16,7 +16,6 @@ WebSocketClient::WebSocketClient(const std::string& url) {
         username = url.substr(namePos + 6);
     }
 
-    // Conexión
     std::string address = "127.0.0.1";
     unsigned short port = 8080;
 
@@ -43,11 +42,10 @@ WebSocketClient::~WebSocketClient() {
 }
 
 bool WebSocketClient::performHandshake(const std::string& url) {
-    // Generar clave aleatoria base64
-    std::string secWebSocketKey = "x3JJHMbDL1EzLkh9GBhXDw=="; // simplificada
+    std::string secWebSocketKey = "x3JJHMbDL1EzLkh9GBhXDw==";
 
     std::ostringstream request;
-    request << "GET " << url.substr(url.find("/")) << " HTTP/1.1\r\n"
+    request << "GET " << url << " HTTP/1.1\r\n"
             << "Host: localhost\r\n"
             << "Upgrade: websocket\r\n"
             << "Connection: Upgrade\r\n"
@@ -67,13 +65,13 @@ bool WebSocketClient::performHandshake(const std::string& url) {
     return response.find("101 Switching Protocols") != std::string::npos;
 }
 
-void WebSocketClient::sendMessage(const std::string& message) {
+void WebSocketClient::sendBinaryFrame(const std::vector<char>& data) {
     std::vector<char> frame;
-    frame.push_back(0x81); // FIN = 1, Text frame
+    frame.push_back(0x82); // FIN = 1, opcode = 2 (binary)
 
-    size_t len = message.size();
+    size_t len = data.size();
     if (len <= 125) {
-        frame.push_back(static_cast<char>(len | 0x80)); // con máscara
+        frame.push_back(static_cast<char>(len | 0x80)); // with mask
     } else if (len <= 65535) {
         frame.push_back(126 | 0x80);
         frame.push_back((len >> 8) & 0xFF);
@@ -84,21 +82,35 @@ void WebSocketClient::sendMessage(const std::string& message) {
             frame.push_back((len >> (8 * i)) & 0xFF);
     }
 
-    // Clave de máscara
     char mask[4] = {0x12, 0x34, 0x56, 0x78};
     frame.insert(frame.end(), mask, mask + 4);
 
-    for (size_t i = 0; i < len; ++i) {
-        frame.push_back(message[i] ^ mask[i % 4]);
-    }
+    for (size_t i = 0; i < len; ++i)
+        frame.push_back(data[i] ^ mask[i % 4]);
 
     socket.send(frame.data(), frame.size());
 }
 
+void WebSocketClient::sendMessage(const std::string& message) {
+    std::vector<char> payload;
+    payload.push_back(5); // código de mensaje privado
+    payload.push_back(username.size());
+    payload.insert(payload.end(), username.begin(), username.end());
+    payload.push_back(message.size());
+    payload.insert(payload.end(), message.begin(), message.end());
+
+    sendBinaryFrame(payload);
+}
+
 void WebSocketClient::updateStatus(const std::string& status) {
-    if (status == "ACTIVO") sendMessage(std::string(1, 2) + "1");
-    else if (status == "OCUPADO") sendMessage(std::string(1, 2) + "2");
-    else if (status == "INACTIVO") sendMessage(std::string(1, 2) + "3");
+    std::vector<char> payload;
+    payload.push_back(2); // código para cambio de estado
+
+    if (status == "ACTIVO") payload.push_back(1);
+    else if (status == "OCUPADO") payload.push_back(2);
+    else if (status == "INACTIVO") payload.push_back(3);
+
+    sendBinaryFrame(payload);
 }
 
 std::vector<std::string> WebSocketClient::getMessages() {
@@ -137,9 +149,8 @@ void WebSocketClient::receiveLoop() {
             char ext[8];
             if (socket.receive(ext, 8, received) != sf::Socket::Done) continue;
             payloadLen = 0;
-            for (int i = 0; i < 8; ++i) {
+            for (int i = 0; i < 8; ++i)
                 payloadLen = (payloadLen << 8) | static_cast<unsigned char>(ext[i]);
-            }
         }
 
         char maskKey[4] = {};
@@ -156,9 +167,8 @@ void WebSocketClient::receiveLoop() {
         }
 
         if (masked) {
-            for (uint64_t i = 0; i < payloadLen; ++i) {
+            for (uint64_t i = 0; i < payloadLen; ++i)
                 payload[i] ^= maskKey[i % 4];
-            }
         }
 
         parseFrame(payload);
@@ -202,4 +212,11 @@ void WebSocketClient::parseFrame(const std::vector<char>& frameData) {
     } else {
         messages.push_back("📩 Mensaje recibido (código desconocido): " + std::to_string(code));
     }
+}
+
+void WebSocketClient::close() {
+    running = false;
+    socket.disconnect();
+    if (receiverThread.joinable())
+        receiverThread.join();
 }

@@ -71,10 +71,17 @@ int main() {
     sendButtonText.setPosition(770, 515);
     sendButtonText.setFillColor(sf::Color::White);
 
+    sf::RectangleShape closeButton({40, 30});
+    closeButton.setPosition(10, 10);
+    closeButton.setFillColor(sf::Color(150, 50, 50));
+    sf::Text closeButtonText("X", font, 18);
+    closeButtonText.setPosition(20, 15);
+    closeButtonText.setFillColor(sf::Color::White);
+
     // Estado actual y botones
     std::string estadoActual = "ACTIVO";
     sf::Text currentStatus("Estado: ACTIVO", font, 16);
-    currentStatus.setPosition(360, 565);
+    currentStatus.setPosition(420, 565);
     currentStatus.setFillColor(sf::Color::Cyan);
 
     sf::RectangleShape statusBtns[3];
@@ -84,13 +91,13 @@ int main() {
 
     for (int i = 0; i < 3; ++i) {
         statusBtns[i].setSize({100, 30});
-        statusBtns[i].setPosition(20 + i * 110, 560);
+        statusBtns[i].setPosition(60 + i * 110, 560);
         statusBtns[i].setFillColor(colores[i]);
 
         statusLabels[i].setFont(font);
         statusLabels[i].setString(estados[i]);
         statusLabels[i].setCharacterSize(16);
-        statusLabels[i].setPosition(30 + i * 110, 565);
+        statusLabels[i].setPosition(70 + i * 110, 565);
         statusLabels[i].setFillColor(sf::Color::White);
     }
 
@@ -99,9 +106,10 @@ int main() {
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed)
+            if (event.type == sf::Event::Closed) {
                 window.close();
-            else if (event.type == sf::Event::TextEntered) {
+                wsClient.close();
+            } else if (event.type == sf::Event::TextEntered) {
                 if (event.text.unicode == 13 && !inputString.empty()) {
                     wsClient.sendMessage(inputString);
                     inputString.clear();
@@ -116,6 +124,10 @@ int main() {
                         wsClient.sendMessage(inputString);
                         inputString.clear();
                     }
+                }
+                if (closeButton.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
+                    window.close();
+                    wsClient.close();
                 }
                 for (int i = 0; i < 3; ++i) {
                     if (statusBtns[i].getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
@@ -149,6 +161,8 @@ int main() {
         window.draw(inputText);
         window.draw(sendButton);
         window.draw(sendButtonText);
+        window.draw(closeButton);
+        window.draw(closeButtonText);
         for (int i = 0; i < 3; ++i) {
             window.draw(statusBtns[i]);
             window.draw(statusLabels[i]);
@@ -156,6 +170,8 @@ int main() {
         window.draw(currentStatus);
         window.display();
     }
+
+    wsClient.close();  // Asegura el cierre si el bucle terminó
 
     return 0;
 }
