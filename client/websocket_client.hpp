@@ -16,7 +16,7 @@ public:
     void sendMessage(const std::string& recipient, const std::string& message);
     void updateStatus(const std::string& status);
     std::vector<std::string> getMessages();
-    std::vector<std::string> getUsers();
+    std::vector<std::pair<std::string, uint8_t>> getUsers();
     bool isConnected() const;
 
     void close();  // Método para cerrar conexión
@@ -24,7 +24,7 @@ public:
 private:
     sf::TcpSocket socket;
     std::vector<std::string> messages;
-    std::vector<std::string> users;
+    std::vector<std::pair<std::string, uint8_t>> users;
     std::string username;
     bool running;
 

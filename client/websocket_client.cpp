@@ -120,10 +120,11 @@ std::vector<std::string> WebSocketClient::getMessages() {
     return messages;
 }
 
-std::vector<std::string> WebSocketClient::getUsers() {
+std::vector<std::pair<std::string, uint8_t>> WebSocketClient::getUsers() {
     std::lock_guard<std::mutex> lock(dataMutex);
     return users;
 }
+
 
 bool WebSocketClient::isConnected() const {
     return running;
@@ -191,17 +192,18 @@ void WebSocketClient::parseFrame(const std::vector<char>& frameData) {
         users.clear();
         uint8_t count = frameData[1];
         size_t idx = 2;
-        for (int i = 0; i < count && idx < frameData.size(); ++i) {
+        for (int i = 0; i < count && idx + 1 < frameData.size(); ++i) {
             uint8_t len = frameData[idx++];
             std::string name(frameData.begin() + idx, frameData.begin() + idx + len);
-            users.push_back(name);
-            idx += len + 1;
+            idx += len;
+            uint8_t status = frameData[idx++];
+            users.emplace_back(name, status);
         }
 
     } else if (code == 53) {
         uint8_t len = frameData[1];
         std::string name(frameData.begin() + 2, frameData.begin() + 2 + len);
-        users.push_back(name);
+        users.emplace_back(name, 1);
         messages.push_back("[Nuevo] Usuario " + name + " se ha conectado");
 
     } else if (code == 54) {
@@ -209,12 +211,25 @@ void WebSocketClient::parseFrame(const std::vector<char>& frameData) {
         std::string name(frameData.begin() + 2, frameData.begin() + 2 + len);
         uint8_t newStatus = frameData[2 + len];
 
-        std::string estadoTexto;
+        // Actualizar o remover usuario
+        auto it = std::find_if(users.begin(), users.end(),
+            [&name](const std::pair<std::string, uint8_t>& u) {
+                return u.first == name;
+            });
+
         if (newStatus == 0) {
-            estadoTexto = "se ha desconectado";
-            auto it = std::find(users.begin(), users.end(), name);
             if (it != users.end()) users.erase(it);
-        } else if (newStatus == 1) estadoTexto = "ahora está ACTIVO";
+        } else {
+            if (it != users.end()) {
+                it->second = newStatus;
+            } else {
+                users.emplace_back(name, newStatus);
+            }
+        }
+
+        std::string estadoTexto;
+        if (newStatus == 0) estadoTexto = "se ha desconectado";
+        else if (newStatus == 1) estadoTexto = "ahora está ACTIVO";
         else if (newStatus == 2) estadoTexto = "ahora está OCUPADO";
         else if (newStatus == 3) estadoTexto = "ahora está INACTIVO";
         else estadoTexto = "tiene un estado desconocido";

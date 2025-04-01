@@ -38,6 +38,11 @@ int main() {
     sf::RenderWindow window(sf::VideoMode(900, 600), "Chat Cliente", sf::Style::Titlebar | sf::Style::Close);
     sf::Font font = loadFont();
 
+    sf::Text userNameText("Usuario: " + username, font, 18);
+    userNameText.setPosition(60, 20);
+    userNameText.setFillColor(sf::Color(0, 200, 255));
+
+
     sf::RectangleShape chatBox({600, 400});
     chatBox.setPosition(20, 50);
     chatBox.setFillColor(sf::Color(45, 45, 45));
@@ -152,14 +157,14 @@ int main() {
                     destinatarioActual = "~";
                     recipientText.setString("Enviando a: Todos");
                 } else {
-                    std::vector<std::string> users = wsClient.getUsers();
+                     std::vector<std::pair<std::string, uint8_t>> users = wsClient.getUsers();
                     float yStart = 60;
                     float lineHeight = 20;
                     for (int i = 0; i < users.size(); ++i) {
                         float userY = yStart + i * lineHeight;
                         if (event.mouseButton.x >= 640 && event.mouseButton.x <= 880 &&
                             event.mouseButton.y >= userY && event.mouseButton.y <= userY + lineHeight) {
-                            destinatarioActual = users[i];
+                            destinatarioActual = users[i].first;
                             recipientText.setString("Enviando a: " + destinatarioActual);
                         }
                     }
@@ -174,12 +179,23 @@ int main() {
 
         inputText.setString(inputString);
 
-        std::vector<std::string> users = wsClient.getUsers();
+        std::vector<std::pair<std::string, uint8_t>> users = wsClient.getUsers();
         std::string userList;
-        for (const auto& user : users) userList += "🟢 " + user + "\n";
+        for (const auto& [name, status] : users) {
+        std::string estadoTexto;
+        if (status == 1) estadoTexto = " [ACTIVO]";
+        else if (status == 2) estadoTexto = " [OCUPADO]";
+        else if (status == 3) estadoTexto = " [INACTIVO]";
+        else estadoTexto = " [---]";
+
+        userList += name + estadoTexto + "\n";
+        }
+
         userListText.setString(userList);
 
+
         window.clear(sf::Color(30, 30, 30));
+        window.draw(userNameText);
         window.draw(chatBox);
         window.draw(chatMessages);
         window.draw(usersBox);
