@@ -59,6 +59,15 @@ int main() {
     usersTitle.setPosition(640, 20);
     usersTitle.setFillColor(sf::Color(0, 180, 255));
 
+    sf::RectangleShape generalChatButton({250, 40});
+    generalChatButton.setPosition(630, 400);
+    generalChatButton.setFillColor(sf::Color(0, 130, 200));
+
+    sf::Text generalChatText(" Chat General", font, 20);
+    generalChatText.setPosition(640, 408);
+    generalChatText.setFillColor(sf::Color::White);
+
+
     sf::RectangleShape inputBox({700, 50});
     inputBox.setPosition(20, 500);
     inputBox.setFillColor(sf::Color(60, 60, 60));
@@ -154,6 +163,11 @@ int main() {
                     std::vector<char> solicitud = {5};  // Código 5 = solicitud de historial
                     wsClient.sendBinaryFrame(solicitud);
                 }
+                if (generalChatButton.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
+                    destinatarioActual = "~";
+                    recipientText.setString("Enviando a: Todos");
+                }
+
 
                 if (closeButton.getGlobalBounds().contains(event.mouseButton.x, event.mouseButton.y)) {
                     window.close();
@@ -236,7 +250,8 @@ int main() {
         window.draw(sendButton);
         window.draw(historyButton);
         window.draw(historyButtonText);
-
+        window.draw(generalChatButton);
+        window.draw(generalChatText);
         window.draw(sendButtonText);
         window.draw(closeButton);
         window.draw(closeButtonText);
