@@ -29,9 +29,16 @@ int main() {
     }
 
     ws_client.connect(con);
+    std::thread wsThread([&]() {
+        ws_client.run();
+    });
+
 
     // Configuración de la ventana de SFML
     sf::RenderWindow window(sf::VideoMode(800, 600), "Cliente de Chat");
+    sf::Clock actividadClock;  // para medir tiempo desde la última interacción
+    bool estaInactivo = false;
+
 
     sf::String inputText;
     sf::Text inputTextDisplay;
@@ -46,33 +53,55 @@ int main() {
     inputTextDisplay.setCharacterSize(24);
 
     // Bucle principal
-    while (window.isOpen()) {
+       while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
-            if (event.type == sf::Event::Closed)
+            if (event.type == sf::Event::Closed) {
                 window.close();
+            }
             else if (event.type == sf::Event::TextEntered) {
-                if (event.text.unicode == 13) {  // Enter key to send message
-                    // Enviar el mensaje al servidor WebSocket
+                actividadClock.restart();  // ⏱ Reinicia el contador por actividad
+
+                if (estaInactivo) {
+                    // ⚡ Cambiar a ACTIVO si estaba inactivo
+                    std::vector<char> estadoActivo = {2, 1};  // Código 2, estado 1 (ACTIVO)
+                    ws_client.send(con, &estadoActivo[0], estadoActivo.size(), websocketpp::frame::opcode::binary);
+                    estaInactivo = false;
+                }
+
+                if (event.text.unicode == 13) {  // ENTER
                     std::string message = inputText.toAnsiString();
                     ws_client.send(con, message, websocketpp::frame::opcode::text);
-                    inputText = "";  // Limpiar el campo de entrada
-                } else if (event.text.unicode == 8 && inputText.getSize() > 0) {  // Backspace
+                    inputText = "";
+                }
+                else if (event.text.unicode == 8 && inputText.getSize() > 0) {  // BACKSPACE
                     inputText = inputText.substring(0, inputText.getSize() - 1);
-                } else {
-                    inputText += event.text.unicode;  // Capturar lo que el usuario escribe
+                }
+                else if (event.text.unicode < 128) {  // Solo texto válido
+                    inputText += event.text.unicode;
                 }
             }
         }
 
-        // Limpiar y dibujar
-        window.clear();
+        // ⏱ Detectar inactividad después de 10 segundos
+        if (actividadClock.getElapsedTime().asSeconds() > 10.f && !estaInactivo) {
+            std::vector<char> estadoInactivo = {2, 3};  // Código 2, estado 3 (INACTIVO)
+            ws_client.send(con, &estadoInactivo[0], estadoInactivo.size(), websocketpp::frame::opcode::binary);
+            estaInactivo = true;
+        }
+
+        // Dibujar
+        window.clear(sf::Color::Black);
         inputTextDisplay.setString(inputText);
         window.draw(inputTextDisplay);
         window.display();
     }
 
+
     // Cerrar la conexión WebSocket y salir
+        ws_client.stop();
+        if (wsThread.joinable()) wsThread.join();
+
     ws_client.stop();
     return 0;
 }

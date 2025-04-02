@@ -61,7 +61,7 @@ int main() {
     usersBox.setOutlineThickness(2);
     usersBox.setOutlineColor(sf::Color(80, 80, 80));
 
-    sf::Text usersTitle("👥 Usuarios", font, 22);
+    sf::Text usersTitle("Usuarios", font, 22);
     usersTitle.setPosition(640, 20);
     usersTitle.setFillColor(sf::Color(0, 180, 255));
 
@@ -107,7 +107,7 @@ int main() {
     historyButton.setPosition(730, 450);
     historyButton.setFillColor(sf::Color(100, 100, 255));
 
-    sf::Text historyButtonText("📜 Historial", font, 20);
+    sf::Text historyButtonText("Historial", font, 20);
     historyButtonText.setPosition(745, 458);
     historyButtonText.setFillColor(sf::Color::White);
 
@@ -277,7 +277,6 @@ int main() {
             window.draw(statusBtns[i]);
             window.draw(statusLabels[i]);
         }
-        window.draw(currentStatus);
         window.display();
     }
 

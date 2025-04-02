@@ -15,9 +15,19 @@
 #include <openssl/sha.h>
 
 struct ClientInfo {
-    sf::TcpSocket* socket;
-    uint8_t status;
+    sf::TcpSocket* socket = nullptr;
+    uint8_t status = 0;
+    std::chrono::steady_clock::time_point ultimaActividad;
+
+    // Constructor por defecto necesario para operator[]
+    ClientInfo() : socket(nullptr), status(0), ultimaActividad(std::chrono::steady_clock::now()) {}
+
+    // Constructor personalizado
+    ClientInfo(sf::TcpSocket* s, uint8_t st)
+        : socket(s), status(st), ultimaActividad(std::chrono::steady_clock::now()) {}
 };
+
+
 
 std::unordered_map<std::string, ClientInfo> clientes;
 std::set<std::string> todosUsuarios;
@@ -88,9 +98,13 @@ void manejarMensajePrivado(const std::string& origen, const std::vector<char>& p
     respuesta.insert(respuesta.end(), destino.begin(), destino.end());
     respuesta.push_back(mensaje.size());
     respuesta.insert(respuesta.end(), mensaje.begin(), mensaje.end());
-    enviarFrame(clientes[destino].socket, respuesta);
-    historial[destino].push_back(origen + ": " + mensaje);
-}
+    auto it = clientes.find(destino);
+    if (it != clientes.end()) {
+        enviarFrame(it->second.socket, respuesta);
+    }
+
+        historial[destino].push_back(origen + ": " + mensaje);
+    }
 
 void cambiarEstado(const std::string& nombreUsuario, uint8_t nuevoEstado) {
     std::lock_guard<std::mutex> lock(usersMutex);
@@ -181,6 +195,7 @@ void atenderCliente(sf::TcpSocket* socket) {
     sf::IpAddress clientIp = socket->getRemoteAddress();
     unsigned short clientPort = socket->getRemotePort();
     std::string nombreUsuario;
+    uint8_t miEstado = 1;
 
     std::vector<char> notif;
     std::vector<sf::TcpSocket*> recipients;
@@ -277,7 +292,8 @@ void atenderCliente(sf::TcpSocket* socket) {
         }
         nuevoUsuario = (todosUsuarios.count(nombreUsuario) == 0);
         todosUsuarios.insert(nombreUsuario);
-        clientes[nombreUsuario] = { socket, 1 };  // status 1: ACTIVO
+        clientes[nombreUsuario] = ClientInfo(socket, 1);
+
     }
 
     std::vector<unsigned char> keyBytes = base64Decode(secKey);
@@ -343,6 +359,14 @@ void atenderCliente(sf::TcpSocket* socket) {
         if (hdrReceived < 2) {
             continue;
         }
+        {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        auto it = clientes.find(nombreUsuario);
+        if (it != clientes.end()) {
+            it->second.ultimaActividad = std::chrono::steady_clock::now();  // ⏱ actualizar
+        }
+        }
+
         bool fin = (hdr[0] & 0x80) != 0;
         uint8_t opcode = hdr[0] & 0x0F;
         bool masked = (hdr[1] & 0x80) != 0;  // (debe ser 1 para frames de cliente)
@@ -399,6 +423,11 @@ void atenderCliente(sf::TcpSocket* socket) {
         if (opcode == 0x8) {  // frame de cierre de cliente
             break;
         }
+        {
+            std::lock_guard<std::mutex> lock(usersMutex);
+            clientes[nombreUsuario].ultimaActividad = std::chrono::steady_clock::now();
+        }
+
         if (opcode != 0x1 && opcode != 0x2) {
             continue;  // ignorar frames que no sean texto/binario
         }
@@ -565,28 +594,55 @@ void atenderCliente(sf::TcpSocket* socket) {
     delete socket;
 }
 
+
+void controlInactividad() {
+    while (serverRunning) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        auto ahora = std::chrono::steady_clock::now();
+
+        std::lock_guard<std::mutex> lock(usersMutex);
+        for (auto& [nombre, info] : clientes) {
+            if (info.status != 3) {
+                auto tiempoInactivo = std::chrono::duration_cast<std::chrono::seconds>(ahora - info.ultimaActividad).count();
+                if (tiempoInactivo >= 10) {
+                    info.status = 3;
+                    std::vector<char> notif = {54, static_cast<char>(nombre.size())};
+                    notif.insert(notif.end(), nombre.begin(), nombre.end());
+                    notif.push_back(3);
+                    for (auto& [_, cliente] : clientes) {
+                        enviarFrame(cliente.socket, notif);
+                    }
+                    std::cout << "[Inactividad] " << nombre << " marcado como INACTIVO\n";
+                }
+            }
+        }
+    }
+}
 int main(int argc, char** argv) {
     if (argc < 2) {
         std::cerr << "Uso: " << argv[0] << " <puerto>\n";
         return 1;
     }
+
     unsigned short puerto = std::atoi(argv[1]);
     if (listener.listen(puerto) != sf::Socket::Done) {
         std::cerr << "Error: no se pudo iniciar el servidor en el puerto " << puerto << "\n";
         return 1;
     }
+
     std::cout << "Servidor escuchando en el puerto " << puerto << "...\n";
+
+    std::thread hiloInactividad(controlInactividad);
+
     while (serverRunning) {
-        sf::TcpSocket* nuevoCliente = new sf::TcpSocket;
-        if (listener.accept(*nuevoCliente) == sf::Socket::Done) {
-            std::thread t(atenderCliente, nuevoCliente);
-            t.detach();
+        sf::TcpSocket* nuevo = new sf::TcpSocket();
+        if (listener.accept(*nuevo) == sf::Socket::Done) {
+            std::thread(atenderCliente, nuevo).detach();
         } else {
-            delete nuevoCliente;
-            std::cerr << "Error al aceptar una nueva conexión.\n";
-            break;
+            delete nuevo;
         }
     }
-    listener.close();
+
+    hiloInactividad.join();
     return 0;
 }
