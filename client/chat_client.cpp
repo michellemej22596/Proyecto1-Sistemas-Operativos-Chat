@@ -202,8 +202,15 @@ int main() {
 
         std::vector<std::string> messages = wsClient.getMessages();
         std::string chat;
-        for (const auto& msg : messages) chat += msg + "\n";
+        bool mostrarMensajes = (estadoActual == "ACTIVO");
+
+        for (const auto& msg : messages) {
+            if (mostrarMensajes) {
+                chat += msg + "\n";
+            }
+        }
         chatMessages.setString(chat);
+
 
         // ⬇️ Calcular altura total del texto
         float lineSpacing = chatMessages.getFont()->getLineSpacing(chatMessages.getCharacterSize());
