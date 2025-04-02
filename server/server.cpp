@@ -527,11 +527,24 @@ void atenderCliente(sf::TcpSocket* socket) {
     }
 
     // Salir del bucle: el cliente cerró la conexión
+    // Salir del bucle: el cliente cerró la conexión
     socket->disconnect();
+
+    // 🟡 Actualizar estado a INACTIVO antes de borrar
+    {
+        std::lock_guard<std::mutex> lock(usersMutex);
+        auto it = clientes.find(nombreUsuario);
+        if (it != clientes.end()) {
+            it->second.status = 0;  // Estado 0 = INACTIVO
+        }
+    }
+
+    // 🔴 Ahora eliminamos
     {
         std::lock_guard<std::mutex> lock(usersMutex);
         clientes.erase(nombreUsuario);
     }
+
 
     // Notificar a los demás usuarios que este usuario se desconectó
     notif.push_back(54);

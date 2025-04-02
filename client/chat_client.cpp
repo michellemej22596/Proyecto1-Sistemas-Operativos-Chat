@@ -212,10 +212,13 @@ int main() {
         if (status == 1) estadoTexto = " [ACTIVO]";
         else if (status == 2) estadoTexto = " [OCUPADO]";
         else if (status == 3) estadoTexto = " [INACTIVO]";
+        else if (status == 0) estadoTexto = " [DESCONECTADO]";  
         else estadoTexto = " [---]";
 
         userList += name + estadoTexto + "\n";
-        }
+    }
+
+
 
         userListText.setString(userList);
 

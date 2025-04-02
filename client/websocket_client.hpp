@@ -18,6 +18,8 @@ public:
     std::vector<std::string> getMessages();
     std::vector<std::pair<std::string, uint8_t>> getUsers();
     bool isConnected() const;
+    
+    void sendBinaryFrame(const std::vector<char>& data);  // ✅ Añadido
 
     void close();  // Método para cerrar conexión
 
@@ -34,7 +36,6 @@ private:
     bool performHandshake(const std::string& url);
     void receiveLoop();
     void parseFrame(const std::vector<char>&);
-    void sendBinaryFrame(const std::vector<char>& data);  // ✅ Añadido
 };
 
 #endif
