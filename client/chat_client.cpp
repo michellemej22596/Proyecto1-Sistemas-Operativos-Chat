@@ -42,6 +42,12 @@ int main() {
     userNameText.setPosition(60, 20);
     userNameText.setFillColor(sf::Color(0, 200, 255));
 
+    sf::Text ocultoText;
+    ocultoText.setFont(font);
+    ocultoText.setCharacterSize(16);
+    ocultoText.setFillColor(sf::Color(200, 200, 100));
+    ocultoText.setPosition(30, 460);
+
 
     sf::RectangleShape chatBox({600, 400});
     chatBox.setPosition(20, 50);
@@ -262,6 +268,11 @@ int main() {
         window.draw(sendButtonText);
         window.draw(closeButton);
         window.draw(closeButtonText);
+        if (estadoActual == "OCUPADO") {
+            ocultoText.setString(" Estado OCUPADO. Los mensajes estan ocultos.");
+            window.draw(ocultoText);
+        }
+
         for (int i = 0; i < 3; ++i) {
             window.draw(statusBtns[i]);
             window.draw(statusLabels[i]);
