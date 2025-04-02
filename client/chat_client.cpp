@@ -191,6 +191,18 @@ int main() {
         for (const auto& msg : messages) chat += msg + "\n";
         chatMessages.setString(chat);
 
+        // ⬇️ Calcular altura total del texto
+        float lineSpacing = chatMessages.getFont()->getLineSpacing(chatMessages.getCharacterSize());
+        float totalTextHeight = lineSpacing * messages.size();
+
+        // ⬇️ Si es más alto que el área visible, lo "subimos"
+        if (totalTextHeight > chatBox.getSize().y) {
+            float offset = totalTextHeight - chatBox.getSize().y;
+            chatMessages.setPosition(30, 60 - offset);  // scroll visual hacia arriba
+        } else {
+            chatMessages.setPosition(30, 60);  // posición normal
+        }
+
         inputText.setString(inputString);
 
         std::vector<std::pair<std::string, uint8_t>> users = wsClient.getUsers();
