@@ -546,11 +546,11 @@ void atenderCliente(sf::TcpSocket* socket) {
     }
 
 
-    // Notificar a los demás usuarios que este usuario se desconectó
+    notif.clear();  // 👈 IMPORTANTE
     notif.push_back(54);
-    notif.push_back(static_cast<char>(nameLen));
+    notif.push_back(static_cast<char>(nombreUsuario.size()));
     notif.insert(notif.end(), nombreUsuario.begin(), nombreUsuario.end());
-    notif.push_back(0);  // estado 0: DESCONECTADO
+    notif.push_back(0);
     recipients.clear();
     {
         std::lock_guard<std::mutex> lock(usersMutex);
