@@ -60,7 +60,7 @@ int main() {
                 window.close();
             }
             else if (event.type == sf::Event::TextEntered) {
-                actividadClock.restart();  // ⏱ Reinicia el contador por actividad
+                actividadClock.restart();  
 
                 if (estaInactivo) {
                     // ⚡ Cambiar a ACTIVO si estaba inactivo
@@ -72,7 +72,7 @@ int main() {
                 if (event.text.unicode == 13) {  // ENTER
                     std::string message = inputText.toAnsiString();
                    std::vector<char> payload;
-                    std::string destinatario = "~";  // o usa algún input si quieres enviar privado
+                    std::string destinatario = "~"; 
 
                     payload.push_back(4);  // ID tipo de mensaje
                     payload.push_back(destinatario.size());
