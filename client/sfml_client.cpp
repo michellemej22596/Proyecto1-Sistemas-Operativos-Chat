@@ -64,14 +64,24 @@ int main() {
 
                 if (estaInactivo) {
                     // ⚡ Cambiar a ACTIVO si estaba inactivo
-                    std::vector<char> estadoActivo = {2, 1};  // Código 2, estado 1 (ACTIVO)
+                    std::vector<char> estadoActivo = {3, 1};  // Código 2, estado 1 (ACTIVO)
                     ws_client.send(con, &estadoActivo[0], estadoActivo.size(), websocketpp::frame::opcode::binary);
                     estaInactivo = false;
                 }
 
                 if (event.text.unicode == 13) {  // ENTER
                     std::string message = inputText.toAnsiString();
-                    ws_client.send(con, message, websocketpp::frame::opcode::text);
+                   std::vector<char> payload;
+                    std::string destinatario = "~";  // o usa algún input si quieres enviar privado
+
+                    payload.push_back(4);  // ID tipo de mensaje
+                    payload.push_back(destinatario.size());
+                    payload.insert(payload.end(), destinatario.begin(), destinatario.end());
+                    payload.push_back(message.size());
+                    payload.insert(payload.end(), message.begin(), message.end());
+
+                    ws_client.send(con, payload.data(), payload.size(), websocketpp::frame::opcode::binary);
+
                     inputText = "";
                 }
                 else if (event.text.unicode == 8 && inputText.getSize() > 0) {  // BACKSPACE
@@ -85,7 +95,7 @@ int main() {
 
         // ⏱ Detectar inactividad después de 10 segundos
         if (actividadClock.getElapsedTime().asSeconds() > 10.f && !estaInactivo) {
-            std::vector<char> estadoInactivo = {2, 3};  // Código 2, estado 3 (INACTIVO)
+            std::vector<char> estadoInactivo = {3, 3}; // Código 2, estado 3 (INACTIVO)
             ws_client.send(con, &estadoInactivo[0], estadoInactivo.size(), websocketpp::frame::opcode::binary);
             estaInactivo = true;
         }

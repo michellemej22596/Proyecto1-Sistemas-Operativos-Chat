@@ -95,7 +95,7 @@ void WebSocketClient::sendBinaryFrame(const std::vector<char>& data) {
 
 void WebSocketClient::sendMessage(const std::string& recipient, const std::string& message) {
     std::vector<char> payload;
-    payload.push_back(5);
+    payload.push_back(4);
     payload.push_back(recipient.size());
     payload.insert(payload.end(), recipient.begin(), recipient.end());
     payload.push_back(message.size());
@@ -106,7 +106,7 @@ void WebSocketClient::sendMessage(const std::string& recipient, const std::strin
 
 void WebSocketClient::updateStatus(const std::string& status) {
     std::vector<char> payload;
-    payload.push_back(2);
+    payload.push_back(3);
 
     if (status == "ACTIVO") payload.push_back(1);
     else if (status == "OCUPADO") payload.push_back(2);

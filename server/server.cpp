@@ -474,7 +474,7 @@ void atenderCliente(sf::TcpSocket* socket) {
             }
             
         
-        } else if (codigo == 2) {
+        } else if (codigo == 3) {
             // Cambio de estado
             if (payload.size() >= 2 && payload[1] >= 1 && payload[1] <= 3) {
                 uint8_t nuevoEstado = payload[1];
@@ -485,21 +485,21 @@ void atenderCliente(sf::TcpSocket* socket) {
                 else if (nuevoEstado == 3) std::cout << "INACTIVO\n";
             }
         
-        } else if (codigo == 5) {
-            if (payload.size() == 1) {
-                // Solicitud manual de historial grupal
-                if (!historialGlobal.empty()) {
-                    std::vector<char> frame = {56, static_cast<char>(historialGlobal.size())};
-                    for (const auto& msg : historialGlobal) {
-                        frame.push_back(static_cast<char>(msg.size()));
-                        frame.insert(frame.end(), msg.begin(), msg.end());
-                    }
-                    enviarFrame(socket, frame);
+        }else if (codigo == 5 && payload.size() == 1) {
+            // ✅ Solo historial grupal
+            if (!historialGlobal.empty()) {
+                std::vector<char> frame = {56, static_cast<char>(historialGlobal.size())};
+                for (const auto& msg : historialGlobal) {
+                    frame.push_back(static_cast<char>(msg.size()));
+                    frame.insert(frame.end(), msg.begin(), msg.end());
                 }
-                continue;
+                enviarFrame(socket, frame);
             }
+        }
+        else if (codigo == 4) {
+            // ✅ Ahora esto es para enviar mensaje
 
-            if (payload.size() < 4) continue;
+            if (payload.size() < 4) return;
 
             uint8_t nombreLen = payload[1];
             std::string destinatario(payload.begin() + 2, payload.begin() + 2 + nombreLen);
@@ -511,30 +511,27 @@ void atenderCliente(sf::TcpSocket* socket) {
                     << "' (len=" << (int)nombreLen << "): " << mensaje << "\n";
 
             if (destinatario == "~") {
-                // ✅ Mensaje general
                 std::string completo = nombreUsuario + ": " + mensaje;
-                historialGlobal.push_back(completo);  // ✅ guardar en historial general
+                historialGlobal.push_back(completo);
 
                 std::vector<char> frame = {55, static_cast<char>(nombreUsuario.size())};
                 frame.insert(frame.end(), nombreUsuario.begin(), nombreUsuario.end());
                 frame.push_back(static_cast<char>(mensaje.size()));
                 frame.insert(frame.end(), mensaje.begin(), mensaje.end());
 
-                // ✅ Enviar a todos, incluyendo al emisor
                 {
                     std::lock_guard<std::mutex> lock(usersMutex);
                     for (auto& [otroNombre, info] : clientes) {
                         enviarFrame(info.socket, frame);
                     }
                 }
-
                 std::cout << "[Mensaje General] " << completo << "\n";
             } else {
-                // 🔒 Mensaje privado
                 manejarMensajePrivado(nombreUsuario, payload);
                 std::cout << "[Privado] " << nombreUsuario << " → " << destinatario << ": " << mensaje << "\n";
             }
         }
+
         else {
             // Mensaje general (difusión)
             std::string msg(payload.begin() + 1, payload.end());
@@ -604,7 +601,7 @@ void controlInactividad() {
         for (auto& [nombre, info] : clientes) {
             if (info.status != 3) {
                 auto tiempoInactivo = std::chrono::duration_cast<std::chrono::seconds>(ahora - info.ultimaActividad).count();
-                if (tiempoInactivo >= 10) {
+                if (tiempoInactivo >= 60) {
                     info.status = 3;
                     std::vector<char> notif = {54, static_cast<char>(nombre.size())};
                     notif.insert(notif.end(), nombre.begin(), nombre.end());
